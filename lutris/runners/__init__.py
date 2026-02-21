@@ -40,7 +40,7 @@ __all__ = [
 ]
 
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Type, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type, cast
 
 from lutris.exceptions import LutrisError, MisconfigurationError
 
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from lutris.runners.runner import Runner
 
 ADDON_RUNNERS: Dict[str, Type["Runner"]] = {}
-_cached_runner_human_names = {}
+_cached_runner_human_names: Dict[str, str] = {}
 
 
 class InvalidRunnerError(MisconfigurationError):
@@ -74,6 +74,15 @@ def get_runner_module(runner_name: str) -> ModuleType:
     return module
 
 
+def get_runner_command_module(runner_name: str) -> ModuleType:
+    if not is_valid_runner_name(runner_name):
+        raise InvalidRunnerError("Invalid runner name '%s'" % runner_name)
+    module = __import__("lutris.runners.commands.%s" % runner_name, globals(), locals(), [runner_name], 0)
+    if not module:
+        raise InvalidRunnerError("No runner commands exist for '%s'." % runner_name)
+    return module
+
+
 def import_runner(runner_name: str) -> Type["Runner"]:
     """Dynamically import a runner class."""
     if runner_name in ADDON_RUNNERS:
@@ -83,10 +92,17 @@ def import_runner(runner_name: str) -> Type["Runner"]:
     return cast(Type["Runner"], getattr(runner_module, runner_name))
 
 
-def import_task(runner: str, task: str) -> Callable[..., Any]:
-    """Return a runner task."""
-    runner_module = get_runner_module(runner)
-    return cast(Callable[..., Any], getattr(runner_module, task))
+def import_task(runner: str, task: str) -> Optional[Callable[..., Any]]:
+    """Return a runner command task, and verifies that it is defined exactly by
+    the command module, not something it imports."""
+    try:
+        runner_module = get_runner_command_module(runner)
+        func = getattr(runner_module, task)
+        if func.__module__ == runner_module.__name__:
+            return cast(Callable[..., Any], func)
+        return None
+    except (AttributeError, InvalidRunnerError):
+        return None
 
 
 def get_installed(sort: bool = True) -> List["Runner"]:
